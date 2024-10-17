@@ -53,16 +53,20 @@ def parse_tecplot(filename):
     num_nodal = cell_lo - 1
     num_cellcentered = len(variables) - num_nodal
 
-    # read nodal data
     def read_data(n):   
         data = np.zeros(n)
         for i in range(n):
             data[i] = float(f.readline().strip())
-        return data
+
+        if np.any(data):
+            return data
     
+    # read nodal data, omitting columns that are empty/all zero
     nodal_data = {}
     for i in range(num_nodal):
-        nodal_data[variables[i]] = read_data(num_nodes)
+        data = read_data(num_nodes)
+        if data is not None:
+            nodal_data[variables[i]] = data
 
     # record position - next line will be start of cell-centered data
     cell_pos = f.tell()
@@ -84,7 +88,9 @@ def parse_tecplot(filename):
     # read cell-centered data
     cell_data = {}
     for i in range(cell_lo-1, cell_hi):
-        cell_data[variables[i]] = read_data(num_cells)
+        data = read_data(num_cells)
+        if data is not None:
+            cell_data[variables[i]] = data
 
     # get cell-centered coords
     # NOTE: this is not a true centroid, but is good enough for now
@@ -105,7 +111,7 @@ def parse_tecplot(filename):
     
     # reorder cell vars so geometry starts first
     cell_vars = ["z(m)", "r(m)", "i0", "i1", "i2", "i3"]
-    cell_vars += variables[cell_lo-1:]
+    cell_vars += list(cell_data.keys())[6:]
     cell_data = {k: cell_data[k] for k in cell_vars}
 
     f.close()
@@ -141,4 +147,42 @@ def interp_to_cells(nodal_data, cell_data):
         if (i >= 6):
             itp[k] = cell_data[k]
 
-    return itp, wts
+    return itp
+
+import os
+from datetime import datetime
+
+def extract_to_txt(file, kind = "interpolated", dlm = "\t", outfile = "output.txt", params = None):
+    nodal, cellcentered = parse_tecplot(file)
+
+    now = datetime.now()
+    dt_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    header = f"# original file: {os.path.abspath(file)}\n" 
+    header += f"# date generated: {dt_str}\n"
+    header += f"# data kind: {kind} "
+
+    if kind == "interpolated":
+        interp = interp_to_cells(nodal, cellcentered)
+        dataset = interp
+        header += "(all variables, interpolated to cell centers)\n"
+    elif kind == "nodal":
+        dataset = nodal
+        header += "(nodal variables only)\n"
+    elif kind == "cellcentered":
+        dataset = cellcentered
+        header += "(cell-centered variables only)\n"
+    else:
+        raise Exception("Invalid kind '{kind}'. Select either 'nodal', 'cellcentered', or 'interpolated'")
+
+    # write metadata
+    header += f"# parameters: {len(params.keys())}\n"
+    for k in params.keys():
+        header += f"# {k}: {params[k]}\n"
+    
+    # write column headers
+    header = header + dlm.join('"' + var + '"' for var in interp.keys())
+
+    # write data
+    data = np.array(list(interp.values())).T
+    np.savetxt(outfile, data, header=header, delimiter = dlm, comments='')
