@@ -152,8 +152,8 @@ def interp_to_cells(nodal_data, cell_data):
 import os
 from datetime import datetime
 
-def extract_to_txt(file, kind = "interpolated", dlm = "\t", outfile = "output.txt", params = None):
-    nodal, cellcentered = parse_tecplot(file)
+def extract_to_txt(tecfile, kind = "interpolated", dlm = "\t", outfile = "output.txt", params = None):
+    nodal, cellcentered = parse_tecplot(tecfile)
 
     now = datetime.now()
     dt_str = now.strftime("%Y-%m-%d %H:%M:%S")
