@@ -1,13 +1,13 @@
 import numpy as np
 
-
-def parse_tecplot(filename):
+def parse_tecplot(filename, startpos = 0):
     """
     Parse a tecplot file from Hall2De, extracting nodal and cell-centered data
     """
-    # read file and skip first line
-    f = open(filename, "r")
-    f.readline()
+    # read file and skip first line containing "title"
+    f = open(filename, "rb")
+    if (startpos == 0):
+        line = f.readline()
 
     def strip_brackets(s, l, r = None):
         """
@@ -30,10 +30,10 @@ def parse_tecplot(filename):
 
     # read variables
     variables = []
-    line = f.readline()
+    line = f.readline().decode("utf-8")
     while not line.startswith("ZONE"):
         variables.append(strip_brackets(line, '"'))
-        line = f.readline()
+        line = f.readline().decode("utf-8")
 
     # strip ZONE off of zone line and parse info
     _, zoneinfo_str = line.split(" ", 1)
@@ -72,8 +72,13 @@ def parse_tecplot(filename):
     cell_pos = f.tell()
 
     # jump ahead to cell connectivity info and read it
+    nextframe_pos = -1
     cells = []
     for line in f:
+        if line.decode("utf-8").startswith("TITLE"):
+            # this is a movie file, the next frame starts here
+            nextframe_pos = f.tell()
+            break
         spl = line.strip().split()
         if len(spl) == 1:
             continue
@@ -115,7 +120,7 @@ def parse_tecplot(filename):
     cell_data = {k: cell_data[k] for k in cell_vars}
 
     f.close()
-    return nodal_data, cell_data
+    return nodal_data, cell_data, nextframe_pos
 
 def interp_to_cells(nodal_data, cell_data):
     """
@@ -152,13 +157,13 @@ def interp_to_cells(nodal_data, cell_data):
 import os
 from datetime import datetime
 
-def extract_to_txt(tecfile, kind = "interpolated", dlm = "\t", outfile = "output.txt", params = None):
-    nodal, cellcentered = parse_tecplot(tecfile)
+def extract_to_txt(tecfile, frame = 0, start_pos = 0, kind = "interpolated", dlm = "\t", outfile = "output.txt", params = None):
+    nodal, cellcentered, nextframe_pos = parse_tecplot(tecfile, start_pos)
 
     now = datetime.now()
     dt_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
-    header = f"# original file: {os.path.abspath(file)}\n" 
+    header = f"# original file: {os.path.abspath(tecfile)}\n" 
     header += f"# date generated: {dt_str}\n"
     header += f"# data kind: {kind} "
 
@@ -176,13 +181,34 @@ def extract_to_txt(tecfile, kind = "interpolated", dlm = "\t", outfile = "output
         raise Exception("Invalid kind '{kind}'. Select either 'nodal', 'cellcentered', or 'interpolated'")
 
     # write metadata
-    header += f"# parameters: {len(params.keys())}\n"
-    for k in params.keys():
-        header += f"# {k}: {params[k]}\n"
+    if params is not None:
+        header += f"# parameters: {len(params.keys())}\n"
+        for k in params.keys():
+            header += f"# {k}: {params[k]}\n"
     
     # write column headers
     header = header + dlm.join('"' + var + '"' for var in interp.keys())
 
     # write data
     data = np.array(list(interp.values())).T
+    if frame > 0 or nextframe_pos != -1:
+        body, ext = os.path.splitext(outfile)
+        outfile = body + f"_{frame:06d}" + ext
+
+    print(outfile)
     np.savetxt(outfile, data, header=header, delimiter = dlm, comments='')
+    return nextframe_pos
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) == 1:
+        quit(1)
+
+    nextframe_pos = 0
+    frame = 0
+    os.makedirs("output")
+    while True:
+        nextframe_pos = extract_to_txt(sys.argv[1], start_pos = nextframe_pos, frame = frame, outfile = "output/output.txt")
+        if nextframe_pos == -1:
+            break
+        frame += 1

@@ -1,2 +1,5 @@
-parser: parse.c
-	$(CC) parse.c -o parser -Wall -Wextra -Wpedantic -std=c2x
+EXE=parser
+SRC=parse2.c
+
+$(EXE): $(SRC)
+	$(CC) $(SRC) -o $(EXE) -Wall -Wextra -Wpedantic -std=c2x
