@@ -1,16 +1,65 @@
 //*** includes *** {{{
 #include <assert.h>
 #include <ctype.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
 //}}}
 
 //*** defines *** {{{
 #define i64 int64_t
 
 //}}}
+
+//*** timing *** {{{
+
+i64 get_time_ns() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_nsec + ts.tv_sec * 1e9;
+}
+
+//}}}
+
+//*** # Error handling *** {{{
+void errorf(const char *fmt, ...) {
+    va_list va;
+    va_start(va, fmt);
+    fprintf(stderr,  "\x1b[1;31m" "Error: " "\x1b[0m");
+    vfprintf(stderr, fmt, va);
+    fprintf(stderr, "\n");
+    va_end(va);
+    exit(1);
+}
+//}}}
+
+//*** # File utilities *** {{{
+
+/*
+ * Same as fopen, but with error checking.
+ */
+FILE *open_file(const char *filename, const char *mode) {
+    FILE *f = fopen(filename, mode);
+    if (f == NULL) {
+        errorf("file `%s` not found", filename);
+    }
+    return f;
+}
+
+/*
+ * Same as fclose, but with error checking.
+ */
+void close_file(FILE *f) {
+    int stat = fclose(f);
+    if (stat == EOF) {
+        errorf("could not close file");
+    }
+}
 
 //*** # String manipulation utilities *** {{{
 //*** ## Slices *** {{{
@@ -31,6 +80,9 @@ typedef struct slice_t {
     i64 len;
     const char *buf;
 } slice_t;
+
+
+//*** ### Slice construction *** {{{
 
 /*
  * Construct a slice from a raw char* buf.
@@ -90,6 +142,8 @@ slice_t slice_suffix(slice_t s, i64 i) {
     i64 j = get_slice_index(i, s.len);
     return slice_n(s.buf + j, s.len - j);
 }
+
+// ### end slice construction }}}
 
 //*** ### Slice utility functions *** {{{
 
@@ -219,6 +273,19 @@ slice_t slice_tok(slice_t *s, const char *delimiters) {
     return token;
 }
 
+/*
+ * Return true if a slice starts with a given string, and false otherwise
+ */
+bool sl_startswith(slice_t s, const char *str) {
+    return strncmp(str, s.buf, strlen(str)) == 0;
+}
+
+/*
+ * NOTE: modifies the input slice!!!
+ * Read a line from the input slice, stripping newlines
+ */
+#define slice_getline(s) (slice_tok(s, "\r\n"))
+
 // ### end slice utility functions }}}
 
 //*** ### Slice tests *** {{{
@@ -269,6 +336,12 @@ int test_slices() {
         assert(sl_cspan(s1, "0") == s1.len);
         assert(sl_cspan(s1, " ") == 6);
         assert(sl_cspan(hello, "w") == hello.len);
+
+        assert(sl_startswith(s1, "Hel"));
+        assert(sl_startswith(s1, "Hello"));
+        assert(!sl_startswith(s1, "Hello, world!!!!"));
+        assert(!sl_startswith(s1, "hello"));
+
     }
     {
         // stripping whitespace
@@ -314,7 +387,14 @@ int test_slices() {
         assert(words.buf == sentence + strlen(sentence));
         assert(*words.buf == '\0');
 
-
+        const char *paragraph = "Here's a sentence.\n"
+                                "Here's another.\r\n"
+                                "And here's one more!\r\n";
+        slice_t par = slice(paragraph);
+        assert(sl_eqstr(slice_getline(&par), "Here's a sentence."));
+        assert(sl_eqstr(slice_getline(&par), "Here's another."));
+        assert(sl_eqstr(slice_getline(&par), "And here's one more!"));
+        assert(sl_eqstr(slice_getline(&par), ""));
 
     }
     printf("\x1b[1;32m" "Tests passed!" "\x1b[0m" "\n");
@@ -324,11 +404,94 @@ int test_slices() {
 // ## end slices }}}
 // # end string manipulation utilities }}}
 
+//*** # Tecplot parsing *** {{{
+
+/*
+ * Read one frame from a tecplot file into a heap-allocated string.
+ * The user must free this memory later.
+ * Begins reading at user-provided position start.
+ * Finishes reading at EOF, or when it sees a line beginning with "TITLE" after the start.
+ * Returns the string, and sets out-parameter len to the length of the string.
+ */
+char* read_tecplot_frame(FILE *f, i64 *len) {
+    #define linebuf_size 80
+    #define initial_alloc 256
+    // create buffer to hold output string
+    char *buf = calloc(initial_alloc, 1);
+    size_t bufcap = initial_alloc;
+    size_t buflen = 0;
+
+    // buffer to hold line
+    char linebuf[linebuf_size];
+
+    for (i64 linenum = 0; !feof(f); linenum++) {
+        // read a line of input
+        fgets(linebuf, linebuf_size, f);
+
+        // make a slice from the line
+        slice_t line = slice(linebuf);
+
+        // We've found the next frame if we see a line
+        // starting with "TITLE" after the first frame
+        if (sl_startswith(line, "TITLE")) {
+            if (linenum > 0) break;
+        } else if (linebuf[0]) {
+            // Append this line to the buffer, growing it if necessary
+            // Make sure to leave room for final null terminator
+            if (buflen + line.len + 1 > bufcap) {
+                size_t new_cap = 2 * bufcap;
+                buf = realloc(buf, new_cap);
+                bufcap = new_cap;
+            }
+            memcpy(&buf[buflen], linebuf, line.len);
+            buflen += line.len;
+            // zero first char of line buffer so we don't write this line again
+            // if we hit EOF or another condition that causes us to fail to read input
+            linebuf[0] = '\0';
+        }
+    }
+
+    // zero remaining bytes of buffer and assign out-parameter
+    memset(&buf[buflen], 0, bufcap - buflen);
+    *len = buflen;
+
+    #undef linebuf_size
+    #undef initial_alloc
+    return buf;
+}
+
+i64 read_tecplot_file(const char *path) {
+    FILE *f = open_file(path, "r");
+    i64 len = 0;
+    i64 i = 0;
+    while (!feof(f) && i < 2) {
+        char *frame = read_tecplot_frame(f, &len);
+    
+        // TODO: do something with frame
+
+        free(frame);
+        i++;
+    }
+    close_file(f);
+    return i;
+}
+
+// # end tecplot parsing }}}
 
 
+int main(int argc, char *argv[]) {
+    //test_slices();
 
+    const char *filename = "data/TecFileNUM_TimeAvg.dat";
+    if (argc > 1) {
+        filename = argv[1];
+    }
+    
+    i64 start_time = get_time_ns();
 
+    i64 i = read_tecplot_file(filename);
 
-int main() {
-    return test_slices();
+    double elapsed_s = 1e-9 * (get_time_ns() - start_time);
+
+    printf("read %lld frames in %.3e seconds\n", i, elapsed_s);
 }
