@@ -64,10 +64,10 @@ void close_file(FILE *f) {
     }
 }
 
-void makedir(const char * dir, bool exist_ok) {
-    int mode = S_IRWXU | S_IRWXUG | S_IRWXO;
+void makedir(const char * dir) {
+    int mode = S_IRWXU | S_IRWXG | S_IRWXO;
     if (mkdir(dir, mode) == -1) {
-        printf("Error creating directory", strerror(errno));
+        printf("Error creating directory: %s", strerror(errno));
     }
 }
 
@@ -534,7 +534,7 @@ StringBuilder *sb_alloc() {
  * Create an empty StringBuilder
  */
 StringBuilder *sb_new() {
-    StringBuilder sb = sb_alloc();
+    StringBuilder *sb = sb_alloc();
     *sb = (StringBuilder){.slice = {.buf = NULL, .len = 0}, .next = NULL};
     return sb;
 }
@@ -562,7 +562,7 @@ StringBuilder *sb_fromchars(const char *s) {
 /*
  * Append a slice to a StringBuilder
  */
-StringBuilder *sb_appendslice(StringBuilder *sb, slice_t sl) {
+void sb_appendslice(StringBuilder *sb, slice_t sl) {
     if (sb->slice.buf == NULL) {
         sb->slice = sl;
     } else {
@@ -573,8 +573,8 @@ StringBuilder *sb_appendslice(StringBuilder *sb, slice_t sl) {
 /*
  * Append chars to a StringBuilder
  */
-StringBuilder *sb_appendchars(StringBuilder *sb, const char *s) {
-    return sb_appendslice(sb, slice(s));
+void sb_appendchars(StringBuilder *sb, const char *s) {
+    sb_appendslice(sb, slice(s));
 }
 
 /*
@@ -832,6 +832,7 @@ TecplotData read_tecplot_frame(slice_t *file_contents) {
 }
 
 void save_tecplot_data(TecplotData d, const char *path, int frame) {
+    (void) d, (void) path, (void) frame;
    // FILE *f = open_file(path, "w");
    // close_file(f);
 }
@@ -844,7 +845,7 @@ i64 process_tecplot_data(const char *path) {
     int i = 0;
     while(str.len > 0) {
         TecplotData data = read_tecplot_frame(&str);
-        save_tecplot_data(data, "output", frame);
+        save_tecplot_data(data, "output", i);
         free_tecplot_data(&data);
         i++;
     }
@@ -866,7 +867,7 @@ int main(int argc, char *argv[]) {
     }
     
     i64 start_time = get_time_us();
-    int frames = read_tecplot_file(filename);
+    int frames = process_tecplot_data(filename);
     double elapsed_s = 1e-6 * (get_time_us() - start_time);
 
     printf("read %d frames in %.3e seconds\n", frames, elapsed_s);
