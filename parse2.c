@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+#include <sys/time.h>
 
 //}}}
 
@@ -18,10 +18,10 @@
 
 //*** timing *** {{{
 
-i64 get_time_ns() {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_nsec + ts.tv_sec * 1e9;
+i64 get_time_us() {
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    return now.tv_usec + now.tv_sec * 1e6;
 }
 
 //}}}
@@ -61,6 +61,34 @@ void close_file(FILE *f) {
     }
 }
 
+/*
+ * Read a file into a string, allocating memory as needed.
+ * Retuns the string, and sets len to the length of that string.
+ * NOTE: only works on text files, or files that otherwise might not contain the '\0' byte.
+ */
+char* read_file(const char *filename, size_t *len) {
+    FILE *f = open_file(filename, "r");
+    char *buffer = NULL;
+     
+    // Get the number of bytes
+    fseek(f, 0, SEEK_END);
+    *len = ftell(f);
+     
+    // Return to beginning of file
+    rewind(f);
+     
+    // Allocate memory, including one extra for a NULL terminator
+    buffer = calloc(*len+1, sizeof(char));	
+     
+    /* copy all the text into the buffer */
+    fread(buffer, sizeof(char), *len, f);
+    close_file(f);
+
+    return buffer;
+}
+
+// # end file utilities
+
 //*** # String manipulation utilities *** {{{
 //*** ## Slices *** {{{
 /*
@@ -95,6 +123,17 @@ typedef struct slice_t {
  * Construct a slice from a raw char* buf and a length.
  */
 #define slice_n(buf, len) (slice_t){len, buf}
+
+/*
+ * Helper functions to get members (occasionally useful)
+ */
+i64 sl_len(slice_t sl) {
+    return sl.len;
+}
+
+const char *sl_buf(slice_t sl) {
+    return sl.buf;
+}
 
 /*
  * Helper function to convert an index i into one that can be used in a slice.
@@ -276,16 +315,54 @@ slice_t slice_tok(slice_t *s, const char *delimiters) {
 /*
  * Return true if a slice starts with a given string, and false otherwise
  */
-bool sl_startswith(slice_t s, const char *str) {
+bool sl_startswith(slice_t s, slice_t x) {
+    return strncmp(x.buf, s.buf, x.len) == 0;
+}
+
+/*
+ * Return true if a slice starts with a given string, and false otherwise
+ */
+bool sl_startswithstr(slice_t s, const char *str) {
     return strncmp(str, s.buf, strlen(str)) == 0;
 }
+
+/*
+ * Find index of first occurrance of slice `needle` in slice `haystack`
+ * Returns length of `haystack` if `needle` not found
+ */
+i64 sl_find(slice_t haystack, slice_t needle) {
+    i64 pos;
+    // haystack:     "Hello, world!"
+    // haystack inds: 0123456789ABC 
+    // haystack.len: 13
+    // if needle is "world!", then we need to advance the start pos up until 7
+    // the needle length is 6, so we want to start the search at 7 = haystack.len - needle.len 
+    for (pos = 0; pos <= (haystack.len - needle.len); pos++) {
+        int i;
+        for (i = 0; i < needle.len; i++) {
+            if (sl_idx(needle, i) != sl_idx(haystack, pos+i)) {
+                break;
+            }
+        }
+        if (i == needle.len) return pos;
+    }
+    return haystack.len;
+}
+
+/*
+ * Find index of first occurrance of string `needle` in slice `haystack`
+ * Returns length of `haystack` if `needle` not found.
+ * NOTE: `sl_findstr` first calls strlen on `needle`. To avoid this, use
+ * `sl_findstrn`
+ */
+#define sl_findstr(haystack, needle) (sl_find(haystack, slice(needle)))
+#define sl_findstrn(haystack, needle, needle_len) (sl_find(haystack, slice_n(needle, needle_len)))
 
 /*
  * NOTE: modifies the input slice!!!
  * Read a line from the input slice, stripping newlines
  */
 #define slice_getline(s) (slice_tok(s, "\r\n"))
-
 // ### end slice utility functions }}}
 
 //*** ### Slice tests *** {{{
@@ -337,11 +414,12 @@ int test_slices() {
         assert(sl_cspan(s1, " ") == 6);
         assert(sl_cspan(hello, "w") == hello.len);
 
-        assert(sl_startswith(s1, "Hel"));
-        assert(sl_startswith(s1, "Hello"));
-        assert(!sl_startswith(s1, "Hello, world!!!!"));
-        assert(!sl_startswith(s1, "hello"));
+        assert(sl_startswithstr(s1, "Hel"));
+        assert(sl_startswithstr(s1, "Hello"));
+        assert(!sl_startswithstr(s1, "Hello, world!!!!"));
+        assert(!sl_startswithstr(s1, "hello"));
 
+        assert(sl_startswith(s1, slice("Hel")));
     }
     {
         // stripping whitespace
@@ -397,6 +475,21 @@ int test_slices() {
         assert(sl_eqstr(slice_getline(&par), ""));
 
     }
+    {
+        // finding
+        const char *str = "word1 word2 word3 word4 wor5 word6";
+        slice_t sl = slice(str);
+        assert(sl_findstr(sl, "word") == 0);
+        assert(sl_findstr(sl, "word1") == 0);
+        assert(sl_findstr(sl, "word2") == 6);
+        assert(sl_findstr(sl, "word3") == 12);
+        assert(sl_findstr(sl, "word4") == 18);
+        assert(sl_findstr(sl, "wor5") == 24);
+        assert(sl_findstr(sl, "word5") == sl.len);
+        assert(sl_findstr(sl, "word6") == 29);
+        assert(sl_findstr(sl, "\0") == 0);
+        assert(sl_findstr(sl, "") == 0);
+    }
     printf("\x1b[1;32m" "Tests passed!" "\x1b[0m" "\n");
     return 0;
 }
@@ -406,73 +499,257 @@ int test_slices() {
 
 //*** # Tecplot parsing *** {{{
 
-/*
- * Read one frame from a tecplot file into a heap-allocated string.
- * The user must free this memory later.
- * Begins reading at user-provided position start.
- * Finishes reading at EOF, or when it sees a line beginning with "TITLE" after the start.
- * Returns the string, and sets out-parameter len to the length of the string.
- */
-char* read_tecplot_frame(FILE *f, i64 *len) {
-    #define linebuf_size 80
-    #define initial_alloc 256
-    // create buffer to hold output string
-    char *buf = calloc(initial_alloc, 1);
-    size_t bufcap = initial_alloc;
-    size_t buflen = 0;
+typedef struct TecplotData {
+    i64 num_cell_vars;
+    i64 num_node_vars;
+    i64 num_itp_vars;
+    char **cell_vars;
+    char **node_vars;
+    char **itp_vars;
+    i64 num_nodes;
+    i64 num_cells;
+    double *node_data;
+    double *cell_data;
+    double *itp_data;
+    i64 cell_size;
+    i64 *cell_inds;
+} TecplotData;
 
-    // buffer to hold line
-    char linebuf[linebuf_size];
+void free_tecplot_data(TecplotData *d) {
+    #define FREE(d) (free(d), (d)=NULL)
+    FREE(d->node_data);
+    FREE(d->cell_data);
+    FREE(d->itp_data);
+    FREE(d->cell_inds);
+    for (int i = 0; i < d->num_node_vars; i++) {
+        FREE(d->node_vars[i]);
+    }
+    for (int i = 0; i < d->num_cell_vars; i++) {
+        FREE(d->cell_vars[i]);
+    }
+    for (int i = 0; i < d->num_itp_vars; i++) {
+        FREE(d->itp_vars[i]);
+    }
+    FREE(d->node_vars);
+    FREE(d->cell_vars);
+    FREE(d->itp_vars);
+    d->num_nodes = 0;
+    d->num_cells = 0;
+    d->num_node_vars = 0;
+    d->num_cell_vars = 0;
+    d->num_itp_vars = 0;
+    #undef FREE
+}
 
-    for (i64 linenum = 0; !feof(f); linenum++) {
-        // read a line of input
-        fgets(linebuf, linebuf_size, f);
+TecplotData read_tecplot_frame_2(slice_t *file_contents) {
+    slice_t s = *file_contents;
 
-        // make a slice from the line
-        slice_t line = slice(linebuf);
+    // strip first line (contains TITLE)
+    slice_getline(&s);
 
-        // We've found the next frame if we see a line
-        // starting with "TITLE" after the first frame
-        if (sl_startswith(line, "TITLE")) {
-            if (linenum > 0) break;
-        } else if (linebuf[0]) {
-            // Append this line to the buffer, growing it if necessary
-            // Make sure to leave room for final null terminator
-            if (buflen + line.len + 1 > bufcap) {
-                size_t new_cap = 2 * bufcap;
-                buf = realloc(buf, new_cap);
-                bufcap = new_cap;
-            }
-            memcpy(&buf[buflen], linebuf, line.len);
-            buflen += line.len;
-            // zero first char of line buffer so we don't write this line again
-            // if we hit EOF or another condition that causes us to fail to read input
-            linebuf[0] = '\0';
+    // static array of variables
+    #define MAX_VARS 1024
+    slice_t variables[MAX_VARS];
+    size_t num_vars = 0;
+
+    // read first variable (begins after "VARIABLES=")
+    slice_t line = slice_getline(&s);
+    slice_tok(&line, "=");               // line contains everything after '='
+    variables[num_vars++] = reslice(line, 1, -1); // strip quotation marks
+
+    // read remaining variables
+    slice_t zone = slice("ZONE");
+    while (!sl_startswith((line = slice_getline(&s)), zone)) {
+        variables[num_vars++] = reslice(slice_strip(line), 1, -1);
+    }
+
+    // parse zone string
+    int num_nodes = -1, num_cells = -1, first_cell = -1, last_cell = -1;
+
+    line = slice_strip(slice_suffix(line, zone.len));
+    
+    slice_t pair;
+    slice_t sl_n = slice("N"), sl_e = slice("E"), sl_varloc = slice("VARLOCATION");
+    // split into comma-separated key-value pairs and check against known keys
+    while ((pair = slice_tok(&line, ", ")).len > 0) {
+        slice_t key = slice_tok(&pair, "="), val = pair;
+        if (sl_eq(key, sl_n)) {
+            num_nodes = atoi(val.buf);
+        } else if (sl_eq(key, sl_e)) {
+            num_cells = atoi(val.buf);
+        } else if (sl_eq(key, sl_varloc)) {
+            slice_t varloc_str = reslice(val, 1, -1);
+            varloc_str = reslice(slice_tok(&varloc_str, "="), 1, -1);
+            slice_t firstcell_str = slice_tok(&varloc_str, "-");
+            first_cell = atoi(firstcell_str.buf) - 1;
+            last_cell = atoi(varloc_str.buf) - 1;
         }
     }
 
-    // zero remaining bytes of buffer and assign out-parameter
-    memset(&buf[buflen], 0, bufcap - buflen);
-    *len = buflen;
+    // allocate memory for data and cell connectivity info
+    int num_node_vars = first_cell;
+    int num_cell_vars = last_cell - first_cell + 1 + 2; // add 2 for z and r at start
+    int cell_size = 4;
+    double *node_data = calloc(num_nodes * num_node_vars, sizeof(double));
+    double *cell_data = calloc(num_cells * (num_cell_vars), sizeof(double));
+    i64 *cell_connectivity = calloc(cell_size * num_cells, sizeof(i64));
 
-    #undef linebuf_size
-    #undef initial_alloc
-    return buf;
+    // read nodal variables
+    for (int i = 0; i < num_node_vars*num_nodes; i++) {
+        line = slice_getline(&s);
+        node_data[i] = atof(line.buf);
+    }
+
+    // read cell variables, starting from after z and r (we'll add these next)
+    for (int i = 2*num_cells; i < num_cell_vars*num_cells; i++) {
+        line = slice_getline(&s);
+        cell_data[i] = atof(line.buf);
+    }
+    
+    // read cell_connectivity info and compute cell centers and node-to-cell interpolation weights
+    double *weights = calloc(num_cells * cell_size, sizeof(double));
+    double inv_n = 1.0 / (double)cell_size;
+    double wt[4];
+    double zn[4];
+    double rn[4];
+    // NOTE: we are assuming z and r are the first two nodal variables
+    int z_ind = 0;
+    int r_ind = 1;
+    for (int i = 0; i < num_cells; i++) {
+        line = slice_lstrip(slice_getline(&s));
+        double sumwt = 0.0;
+        double z_cell = 0.0;
+        double r_cell = 0.0;
+
+        // get connectivity info and compute cell centers
+        for (int j = 0; j < cell_size; j++) {
+            slice_t tok = slice_tok(&line, " ");
+            i64 node_ind = atoi(tok.buf);
+            cell_connectivity[j + cell_size*i] = node_ind;
+            zn[j] = node_data[z_ind*num_nodes + node_ind];
+            rn[j] = node_data[r_ind*num_nodes + node_ind];
+            z_cell += zn[j] * inv_n;
+            r_cell += rn[j] * inv_n;
+        }
+        
+        // add z_cell and r_cell to cell_data
+        cell_data[0*num_cells + i] = z_cell;
+        cell_data[1*num_cells + i] = r_cell;
+
+        // compute interpolation weights for later use
+        for (int j = 0; j < cell_size; j++) {
+            double dz = zn[j] - z_cell;
+            double dr = rn[j] - r_cell;
+            double dist2 = dz*dz + dr*dr;
+            wt[j] = 1.0 / dist2;
+            sumwt += wt[j];
+        }
+
+        // divide by sum of weights
+        for (int j = 0; j < cell_size; j++) {
+            wt[j] /= sumwt;
+            weights[i*cell_size + j] = wt[j];
+        }
+    }
+
+    // allocate separate arrays of nodal and cell-centered vars 
+    int num_itp_vars = num_node_vars + num_cell_vars - 2;
+    char **node_vars = calloc(num_node_vars, sizeof(char*));
+    char **cell_vars = calloc(num_cell_vars, sizeof(char*));
+    char **itp_vars = calloc(num_itp_vars, sizeof(char*));
+
+    // create list of nodal vars
+    for (int i = 0; i < num_node_vars; i++) {
+        slice_t var = variables[i];
+        node_vars[i] = calloc(var.len+1, sizeof(char));
+        itp_vars[i] = calloc(var.len+1, sizeof(char));
+        memcpy(node_vars[i], var.buf, var.len);
+        memcpy(itp_vars[i], var.buf, var.len);
+    }
+
+    // add z and r to front of array of cell-centerd vars
+    slice_t z = variables[z_ind];
+    slice_t r = variables[r_ind];
+    cell_vars[0] = calloc(z.len+1, sizeof(char));
+    cell_vars[1] = calloc(r.len+1, sizeof(char));
+    memcpy(cell_vars[0], z.buf, z.len);
+    memcpy(cell_vars[1], r.buf, r.len);
+
+    // copy remaining cell-centered variables
+    for (int i = 2; i < num_cell_vars; i++) {
+        slice_t var = variables[(i-2) + first_cell];
+        cell_vars[i] = calloc(var.len+1, sizeof(char));
+        memcpy(cell_vars[i], var.buf, var.len);
+
+        int itp_ind = num_node_vars + i - 2;
+        itp_vars[itp_ind] = calloc(var.len+1, sizeof(char));
+        memcpy(itp_vars[itp_ind], var.buf, var.len);
+    }
+
+    // interpolate variables to cell centers
+    // variable order is <node vars>, <cell vars>, skipping z and r in cell vars
+    double *interp_data = calloc(num_itp_vars * num_cells, sizeof(double));
+    memcpy(interp_data, cell_data, 2*num_cells*sizeof(double)); // copy z and r
+    
+    // interpolate nodal data to cell centers
+    for (int var = 2; var < num_node_vars; var++) {
+        for (int cell = 0; cell < num_cells; cell++) {
+            double cell_val = 0.0;
+            for (int i = 0; i < cell_size; i++) {
+                int node_ind = cell_connectivity[i + cell*cell_size];
+                double weight = weights[i + cell*cell_size];
+                double node_val = node_data[node_ind + var * num_nodes];
+                cell_val += weight * node_val;
+            }
+            interp_data[cell + var * num_cells] = cell_val;
+        }
+    }
+
+    // copy remaining cell data
+    memcpy(&interp_data[num_node_vars*num_cells], &cell_data[2*num_cells], (num_cell_vars-2)*num_cells * sizeof(double));
+
+    // clean up
+    free(weights);
+    
+    // set output parameter
+    *file_contents = s;
+
+    return (TecplotData) {
+        .num_node_vars = num_node_vars,
+        .node_vars = node_vars,
+        .num_cell_vars = num_cell_vars,
+        .cell_vars = cell_vars,
+        .num_itp_vars = num_itp_vars,
+        .itp_vars = itp_vars,
+        .cell_size = cell_size,
+        .cell_inds = cell_connectivity,
+        .num_nodes = num_nodes,
+        .node_data = node_data,
+        .num_cells = num_cells,
+        .cell_data = cell_data,
+        .itp_data = interp_data,
+    };
+
+    #undef MAX_VARS
 }
 
-i64 read_tecplot_file(const char *path) {
-    FILE *f = open_file(path, "r");
-    i64 len = 0;
-    i64 i = 0;
-    while (!feof(f) && i < 2) {
-        char *frame = read_tecplot_frame(f, &len);
-    
-        // TODO: do something with frame
+void save_tecplot_data(TecplotData d) {
 
-        free(frame);
+}
+
+i64 read_tecplot_file_2(const char *path) {
+    size_t len;
+    char *contents = read_file(path, &len);
+    slice_t str = slice_n(contents, len);
+
+    int i = 0;
+    while(str.len > 0) {
+        TecplotData data = read_tecplot_frame_2(&str);
+        free_tecplot_data(&data);
         i++;
     }
-    close_file(f);
+
+    free(contents);
     return i;
 }
 
@@ -480,18 +757,19 @@ i64 read_tecplot_file(const char *path) {
 
 
 int main(int argc, char *argv[]) {
-    //test_slices();
 
-    const char *filename = "data/TecFileNUM_TimeAvg.dat";
+    const char *filename;
     if (argc > 1) {
         filename = argv[1];
+    } else {
+        return test_slices();
     }
     
-    i64 start_time = get_time_ns();
+    i64 start_time = get_time_us();
 
-    i64 i = read_tecplot_file(filename);
+    i64 i = read_tecplot_file_2(filename);
 
-    double elapsed_s = 1e-9 * (get_time_ns() - start_time);
+    double elapsed_s = 1e-6 * (get_time_us() - start_time);
 
-    printf("read %lld frames in %.3e seconds\n", i, elapsed_s);
+    printf("read %ld frames in %.3e seconds\n", i, elapsed_s);
 }
