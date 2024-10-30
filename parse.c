@@ -97,7 +97,7 @@ char* read_file(const char *filename, size_t *len) {
     return buffer;
 }
 
-// # end file utilities
+// # end file utilities }}}
 
 //*** # String manipulation utilities *** {{{
 //*** ## Slices *** {{{
@@ -505,6 +505,94 @@ int test_slices() {
 }
 // ### end slice tests }}}
 // ## end slices }}}
+
+//*** ## String builders *** {{{
+/*
+ * These are linked lists of slices, used when constructing a string from many smaller parts.
+ * Their methods are prefixed by `sb_`;
+ * String builders are constructed from some initial slice or string using `sb_fromslice` or `sb_fromchars`, 
+ * or from scratch using `sb_new`. Note that these creation methods return pointers.
+ * They can then can be appended to repeatedly using `sb_append`.
+ * A string builder can then be converted to a string (char*) by calling `sb_tochars` on the builder.
+ * The returned char* is heap-allocated and must be freed by the user.
+ * They do not own the string data they contain, but do allocate memory to build a linked list.
+ * The user is responsible for freeing the StringBuilder using sb_free when they are done with it.
+ */
+typedef struct StringBuilder {
+    slice_t slice;
+    struct StringBuilder *next;
+} StringBuilder;
+
+/*
+ * Allocate memory for a StringBuilder
+ */
+StringBuilder *sb_alloc() {
+    return calloc(1, sizeof(StringBuilder));
+}
+
+/*
+ * Create an empty StringBuilder
+ */
+StringBuilder *sb_new() {
+    StringBuilder sb = sb_alloc();
+    *sb = (StringBuilder){.slice = {.buf = NULL, .len = 0}, .next = NULL};
+    return sb;
+}
+
+/*
+ * Create a StringBuilder from a slice 
+ */
+StringBuilder *sb_fromslice(slice_t sl) {
+    StringBuilder *sb = sb_alloc();
+    sb->slice = sl;
+    sb->next = NULL;
+    return sb;
+}
+
+/*
+ * Create a StringBuilder from a char*
+ */
+StringBuilder *sb_fromchars(const char *s) {
+    StringBuilder *sb = sb_alloc();
+    sb->slice = slice(s);
+    sb->next = NULL;
+    return sb;
+}
+
+/*
+ * Append a slice to a StringBuilder
+ */
+StringBuilder *sb_appendslice(StringBuilder *sb, slice_t sl) {
+    if (sb->slice.buf == NULL) {
+        sb->slice = sl;
+    } else {
+        sb->next = sb_fromslice(sl);
+    }
+}
+
+/*
+ * Append chars to a StringBuilder
+ */
+StringBuilder *sb_appendchars(StringBuilder *sb, const char *s) {
+    return sb_appendslice(sb, slice(s));
+}
+
+/*
+ * Free a stringbuilder instance
+ */ 
+void sb_free(StringBuilder *sb) {
+    if (sb == NULL) return;
+    if (sb->next != NULL) {
+        sb_free(sb->next);
+        sb->next = NULL;
+    }
+    free(sb);
+}
+
+
+
+// ## end string builders }}}
+
 // # end string manipulation utilities }}}
 
 //*** # Tecplot parsing *** {{{
@@ -744,14 +832,11 @@ TecplotData read_tecplot_frame(slice_t *file_contents) {
 }
 
 void save_tecplot_data(TecplotData d, const char *path, int frame) {
-    FILE *f = open_file(path, "w");
-
-
-
-    close_file(f);
+   // FILE *f = open_file(path, "w");
+   // close_file(f);
 }
 
-i64 read_tecplot_file_2(const char *path) {
+i64 process_tecplot_data(const char *path) {
     size_t len;
     char *contents = read_file(path, &len);
     slice_t str = slice_n(contents, len);
@@ -759,7 +844,7 @@ i64 read_tecplot_file_2(const char *path) {
     int i = 0;
     while(str.len > 0) {
         TecplotData data = read_tecplot_frame(&str);
-        save_tecplot_data()
+        save_tecplot_data(data, "output", frame);
         free_tecplot_data(&data);
         i++;
     }
@@ -781,10 +866,8 @@ int main(int argc, char *argv[]) {
     }
     
     i64 start_time = get_time_us();
-
-    i64 i = read_tecplot_file_2(filename);
-
+    int frames = read_tecplot_file(filename);
     double elapsed_s = 1e-6 * (get_time_us() - start_time);
 
-    printf("read %ld frames in %.3e seconds\n", i, elapsed_s);
+    printf("read %d frames in %.3e seconds\n", frames, elapsed_s);
 }
