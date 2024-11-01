@@ -2,7 +2,7 @@ EXE=parser
 SRC=parse.c
 
 WARNINGS=-Wall -Wextra -Wpedantic
-CCFLAGS = -gdwarf $(WARNINGS)
+CCFLAGS = -gdwarf $(WARNINGS) -I ~/include
 
 ifeq ($(DEBUG), 1)
 	CCFLAGS += -O1 -fsanitize=address
