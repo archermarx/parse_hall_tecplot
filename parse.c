@@ -352,14 +352,12 @@ TecplotData read_tecplot_frame(Slice *file_contents) {
 
 void save_tecplot_data(
     TecplotData d,
-    const char *path,
+    const char *output_dir,
     int frame,
     const char *original_path,
-    int argc,
-    char **argv
+    int num_params,
+    char **params
 ) {
-    (void) d, (void) path, (void) frame;
-
     // assemble string using StringBuilder
     StringBuilder sb = sb_new();
 
@@ -374,10 +372,12 @@ void save_tecplot_data(
         , original_path, date_str
     );
 
-    if (argc > 2) {
+    if (num_params > 0) {
         sb_appendchars(&sb, "# parameters:\n");
-        for (int i = 2; i < argc; i+=2) {
-            sb_appendf(&sb, "#    %s: %s\n", argv[i], argv[i+1]);
+        for (int i = 0; i < num_params; i++) {
+            Slice val = slice(params[i]);
+            Slice key = slice_tok(&val, "=");
+            sb_appendf(&sb, "#    %.s: %.s\n", key.len, key.buf, val.len, val.buf);
         }
     }
 
@@ -409,7 +409,7 @@ void save_tecplot_data(
     sb_deallocate(&sb);
 
     // write to file
-    sb_appendf(&sb, "%s/output_%04d.txt", path, frame);
+    sb_appendf(&sb, "%s/output_%04d.txt", output_dir, frame);
     char *filename = sb_tochars(sb);
     printf("%s\n", filename);
     sb_deallocate(&sb);
@@ -422,7 +422,7 @@ void save_tecplot_data(
     tam_deallocate(contents);
 }
 
-i64 process_tecplot_data(const char *path, int argc, char **argv) {
+i64 process_tecplot_data(const char *path, const char *output_dir, int num_params, char **params) {
     size_t len;
     char *contents = read_file(path, &len);
     Slice str = slice_n(contents, len);
@@ -430,7 +430,7 @@ i64 process_tecplot_data(const char *path, int argc, char **argv) {
     int i = 0;
     while(str.len > 0) {
         TecplotData data = read_tecplot_frame(&str);
-        save_tecplot_data(data, "output", i, path, argc, argv);
+        save_tecplot_data(data, output_dir, i, path, num_params, params);
         free_tecplot_data(&data);
         i++;
     }
@@ -448,9 +448,26 @@ int main(int argc, char *argv[]) {
     } else {
         return tam_test_strings();
     }
+
+    const char *output_dir = ".";
+    int first_param = 2;
+    if (argc > 2) {
+        // check for explicit output file specification
+        if (strcmp(argv[2], "-o") == 0 || strcmp(argv[2], "--output") == 0) {
+            if (argc > 3) {
+                output_dir = argv[3];
+                first_param += 2;
+            } else {
+                errorf("Missing argument after `-o` or `--output`");
+            }
+        }
+    }
+    int num_params = argc - first_param;
     
     i64 start_time = get_time_us();
-    int frames = process_tecplot_data(filename, argc, argv);
+    
+    int frames = process_tecplot_data(filename, output_dir, num_params, argv + first_param);
+
     double elapsed_s = 1e-6 * (get_time_us() - start_time);
 
     printf("read %d frames in %.3e seconds\n", frames, elapsed_s);
