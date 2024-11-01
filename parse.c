@@ -364,7 +364,6 @@ void save_tecplot_data(
     StringBuilder sb = sb_new();
 
     // create header: 
-    char *abspath = realpath(original_path, NULL);
     char date_str[64];
     get_date(date_str, sizeof(date_str), "%Y-%m-%d %H:%M:%S");
 
@@ -372,7 +371,7 @@ void save_tecplot_data(
         "# original file: %s\n"
         "# date generated : %s\n" 
         "# data kind = interpolated (all variables, interpolated to cell centers)\n"
-        , abspath, date_str
+        , original_path, date_str
     );
 
     if (argc > 2) {
@@ -405,10 +404,8 @@ void save_tecplot_data(
 
     // build string
     char *contents = sb_tochars(sb);
-    //printf("contents = '''\n%s'''\n", contents);
 
     // cleanup stuff used to generate contents
-    tam_deallocate(abspath);
     sb_deallocate(&sb);
 
     // write to file
