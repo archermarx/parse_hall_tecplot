@@ -358,11 +358,7 @@ struct tp_args {
     char **params;
 };
 
-void save_tecplot_data(
-    TecplotData d,
-    int frame,
-    struct tp_args args
-) {
+void save_tecplot_data(TecplotData d, int frame, bool at_end, struct tp_args args) {
     // assemble string using StringBuilder
     StringBuilder sb = sb_new();
 
@@ -414,7 +410,11 @@ void save_tecplot_data(
     sb_deallocate(&sb);
 
     // write to file
-    sb_appendf(&sb, "%s/%s_%04d.txt", args.output_dir, args.output_file_prefix, frame);
+    if (at_end && frame == 0){
+        sb_appendf(&sb, "%s/%s.txt", args.output_dir, args.output_file_prefix);
+    } else {
+        sb_appendf(&sb, "%s/%s_%04d.txt", args.output_dir, args.output_file_prefix, frame);
+    }
     char *filename = sb_tochars(sb);
     printf("%s\n", filename);
     sb_deallocate(&sb);
@@ -435,7 +435,7 @@ i64 process_tecplot_data(struct tp_args args) {
     int i = 0;
     while(str.len > 0) {
         TecplotData data = read_tecplot_frame(&str);
-        save_tecplot_data(data, i, args);
+        save_tecplot_data(data, i, str.len == 0, args);
         free_tecplot_data(&data);
         i++;
     }
