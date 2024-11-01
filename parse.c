@@ -377,7 +377,8 @@ void save_tecplot_data(
         for (int i = 0; i < num_params; i++) {
             Slice val = slice(params[i]);
             Slice key = slice_tok(&val, "=");
-            sb_appendf(&sb, "#    %.s: %.s\n", key.len, key.buf, val.len, val.buf);
+            printf("key = %.*s\nval=%.*s\n", key.len, key.buf, val.len, val.buf);
+            sb_appendf(&sb, "#    %.*s: %.*s\n", key.len, key.buf, val.len, val.buf);
         }
     }
 

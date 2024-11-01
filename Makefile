@@ -1,7 +1,7 @@
 EXE=parser
 SRC=parse.c
 
-WARNINGS=-Wall -Wextra -Wpedantic
+WARNINGS=-Wall -Wextra -Wpedantic -Wno-format
 CCFLAGS = -gdwarf $(WARNINGS) -I ~/include
 
 ifeq ($(DEBUG), 1)
