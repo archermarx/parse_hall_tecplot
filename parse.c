@@ -356,6 +356,8 @@ struct tp_args {
     const char *output_file_prefix;
     int num_params;
     char **params;
+    bool time;
+    int verbose;
 };
 
 void save_tecplot_data(TecplotData d, int frame, bool at_end, struct tp_args args) {
@@ -416,7 +418,7 @@ void save_tecplot_data(TecplotData d, int frame, bool at_end, struct tp_args arg
         sb_appendf(&sb, "%s/%s_%04d.txt", args.output_dir, args.output_file_prefix, frame);
     }
     char *filename = sb_tochars(sb);
-    printf("%s\n", filename);
+    if (args.verbose > 0) printf("%s\n", filename);
     sb_deallocate(&sb);
     
     FILE *f = open_file(filename, "w");
@@ -453,6 +455,8 @@ struct tp_args parse_args(int argc, char **argv) {
     args.output_file_prefix = "output";
     args.num_params = 0;
     args.params = NULL;
+    args.time = false;
+    args.verbose = 0;
 
     // get tecplot file name
     if (argc > 1) {
@@ -480,6 +484,12 @@ struct tp_args parse_args(int argc, char **argv) {
             } else {
                 errorf("-p or --prefix was passed but no argument was provided");
             }
+        } else if (strcmp(arg, "-t") == 0 || strcmp(arg, "--time") == 0) {
+            iarg++;
+            args.time = true;
+        } else if (strcmp(arg, "-v") == 0 || strcmp(arg, "--verbose") == 0) {
+            iarg++;
+            args.verbose = 1;
         } else {
             break;
         }
@@ -504,5 +514,6 @@ int main(int argc, char *argv[]) {
 
     double elapsed_s = 1e-6 * (get_time_us() - start_time);
 
-    printf("read %d frames in %.3e seconds\n", frames, elapsed_s);
+    if (args.time)
+        printf("read %d frames in %.3e seconds\n", frames, elapsed_s);
 }
