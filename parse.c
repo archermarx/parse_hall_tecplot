@@ -418,7 +418,7 @@ void save_tecplot_data(TecplotData d, int frame, bool at_end, struct tp_args arg
         sb_appendf(&sb, "%s/%s_%04d.txt", args.output_dir, args.output_file_prefix, frame);
     }
     char *filename = sb_tochars(sb);
-    if (args.verbose > 0) printf("%s\n", filename);
+    if (args.verbose > 1) printf("%s\n", filename);
     sb_deallocate(&sb);
     
     FILE *f = open_file(filename, "w");
@@ -489,7 +489,18 @@ struct tp_args parse_args(int argc, char **argv) {
             args.time = true;
         } else if (strcmp(arg, "-v") == 0 || strcmp(arg, "--verbose") == 0) {
             iarg++;
-            args.verbose = 1;
+            if (iarg < argc) {
+                const char *level = argv[iarg];
+                int vlevel = atoi(level);
+                if (vlevel > 0 || (vlevel == 0 && strcmp(level, "0") == 0)) {
+                    args.verbose = vlevel;
+                    iarg++;
+                } else {
+                    args.verbose = 1;
+                }
+            } else {
+                args.verbose = 1;
+            }
         } else {
             break;
         }
@@ -505,8 +516,10 @@ struct tp_args parse_args(int argc, char **argv) {
 }
 
 int main(int argc, char *argv[]) {
-
     struct tp_args args = parse_args(argc, argv);
+
+    if (args.verbose > 0)
+        printf("%s\n", args.tecplot_file);
     
     i64 start_time = get_time_us();
     
